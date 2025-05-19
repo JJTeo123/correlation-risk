@@ -23,6 +23,3 @@ streamlit run app.py
 
 ## 📓 Running the Notebook
 Open `correlation_analysis.ipynb` in Jupyter or VS Code.
-
-## authors
-phoebe and jiajun
