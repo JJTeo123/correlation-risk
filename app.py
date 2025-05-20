@@ -18,10 +18,10 @@ st.title("📈 Stock Correlation & Risk Dashboard")
 st.sidebar.header("Configuration")
 
 # Available ticker options
-ticker_options = ["AAPL", "TSLA", "MSFT", "AMZN", "NVDA"]
+ticker_options = ["ANET", "FN", "ALAB","AAPL", "TSLA", "MSFT", "AMZN", "NVDA"]
 tickers = st.sidebar.multiselect("Select tickers", options=ticker_options, default=ticker_options)
 start = st.sidebar.date_input("Start Date", pd.to_datetime("2020-01-01"))
-end = st.sidebar.date_input("End Date", pd.to_datetime("2025-01-01"))
+end = st.sidebar.date_input("End Date", pd.to_datetime("2025-04-30"))
 window = st.sidebar.slider("Rolling Correlation Window (days)", 20, 180, 60)
 
 # Main analysis trigger
@@ -107,3 +107,4 @@ if st.sidebar.button("🔍 Run Analysis"):
     st.success("Analysis complete!")
 else:
     st.info("👈 Select tickers and press 'Run Analysis' to begin.")
+
