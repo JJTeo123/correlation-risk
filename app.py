@@ -5,54 +5,74 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import io
 
+# Optional: Riskfolio for portfolio optimization
 try:
     import riskfolio.Portfolio as pf
     riskfolio_available = True
 except ImportError:
     riskfolio_available = False
 
-st.set_page_config(page_title="Correlation Matrix App", layout="wide")
+st.set_page_config(page_title="Stock Correlation & Risk", layout="wide")
 st.title("📈 Stock Correlation & Risk Dashboard")
 
 # Sidebar controls
 st.sidebar.header("Configuration")
-
-# Available ticker options
-ticker_options = ["ANET", "FN", "ALAB","AAPL", "TSLA", "MSFT", "AMZN", "NVDA"]
+ticker_options = ["ANET", "FN", "ALAB", "AAPL", "TSLA", "MSFT", "AMZN", "NVDA"]
 tickers = st.sidebar.multiselect("Select tickers", options=ticker_options, default=ticker_options)
 start = st.sidebar.date_input("Start Date", pd.to_datetime("2020-01-01"))
 end = st.sidebar.date_input("End Date", pd.to_datetime("2025-04-30"))
 window = st.sidebar.slider("Rolling Correlation Window (days)", 20, 180, 60)
 
-# Main analysis trigger
+# Run analysis
 if st.sidebar.button("🔍 Run Analysis"):
     with st.spinner("Fetching and analyzing data..."):
         data = {}
 
-        # Download each ticker independently to avoid MultiIndex
         for ticker in tickers:
-            st.write(f"Downloading {ticker}...")
-            stock = yf.download(ticker, start=start, end=end, group_by="column")
+            st.write(f"📥 Downloading {ticker}...")
+            stock = yf.download(ticker, start=start, end=end)
 
-            if not stock.empty:
-                if "Adj Close" in stock.columns:
-                    data[ticker] = stock["Adj Close"].squeeze()
-                elif "Close" in stock.columns:
-                    st.warning(f"{ticker} missing 'Adj Close'. Using 'Close' instead.")
-                    data[ticker] = stock["Close"].squeeze()
-                else:
-                    st.error(f"{ticker} has no valid price columns.")
+            if stock.empty:
+                st.error(f"❌ No data found for {ticker}.")
+                continue
+
+            # Handle MultiIndex if present
+            if isinstance(stock.columns, pd.MultiIndex):
+                try:
+                    close_prices = stock["Close"][ticker].dropna()
+                except KeyError:
+                    st.warning(f"⚠️ 'Close' prices not found for {ticker}.")
+                    continue
             else:
-                st.error(f"{ticker} returned no data.")
+                if "Close" not in stock.columns:
+                    st.warning(f"⚠️ 'Close' prices not found for {ticker}.")
+                    continue
+                close_prices = stock["Close"].dropna()
 
-        if len(data) == 0:
+            if not close_prices.empty:
+                data[ticker] = close_prices
+            else:
+                st.warning(f"⚠️ No valid Close prices for {ticker}.")
+
+        if not data:
             st.error("❌ No valid data downloaded.")
         else:
-            df = pd.DataFrame(data).dropna()
-            st.subheader("📊 Adjusted Close Prices")
+            df = pd.DataFrame(data).ffill().dropna()
+
+            st.subheader("📊 Combined Close Prices")
+            st.dataframe(df.tail(10))
             st.line_chart(df)
 
-            # Return and correlation
+            # CSV download
+            csv = df.to_csv(index=True).encode("utf-8")
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name="close_prices.csv",
+                mime="text/csv"
+            )
+
+            # Correlation matrix
             returns = df.pct_change().dropna()
             corr = returns.corr()
 
@@ -64,12 +84,15 @@ if st.sidebar.button("🔍 Run Analysis"):
             sns.heatmap(corr, annot=True, cmap="coolwarm", linewidths=0.5, ax=ax)
             st.pyplot(fig)
 
-            # CSV Export
+            # Download correlation matrix
             buffer = io.StringIO()
             corr.to_csv(buffer)
-            buffer.seek(0)
-            csv = buffer.getvalue().encode("utf-8")  # Convert to bytes
-            st.download_button("⬇️ Download Correlation Matrix CSV", data=csv, file_name="correlation_matrix.csv", mime="text/csv")
+            st.download_button(
+                "⬇️ Download Correlation Matrix CSV",
+                data=buffer.getvalue().encode("utf-8"),
+                file_name="correlation_matrix.csv",
+                mime="text/csv"
+            )
 
             # Rolling correlation
             if len(tickers) >= 2:
@@ -77,7 +100,7 @@ if st.sidebar.button("🔍 Run Analysis"):
                 roll_corr = returns[tickers[0]].rolling(window).corr(returns[tickers[1]])
                 st.line_chart(roll_corr.dropna())
 
-            # Risk metrics + optimization
+            # Portfolio optimization
             if riskfolio_available and len(tickers) > 1:
                 st.subheader("📉 Risk Metrics (VaR, CVaR, Sharpe)")
                 port = pf.Portfolio(returns=returns)
@@ -103,8 +126,7 @@ if st.sidebar.button("🔍 Run Analysis"):
                 rebalance_returns = weighted_returns.resample('M').apply(lambda x: (1 + x).prod() - 1)
                 st.line_chart((1 + rebalance_returns).cumprod())
             elif not riskfolio_available:
-                st.warning("Install `riskfolio-lib` to enable risk metrics.")
-    st.success("Analysis complete!")
+                st.warning("⚠️ Install `riskfolio-lib` to enable risk metrics and optimization.")
+    st.success("✅ Analysis complete!")
 else:
     st.info("👈 Select tickers and press 'Run Analysis' to begin.")
-
