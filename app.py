@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import io
 import plotly.express as px
 import numpy as np
+import itertools
 
-# Optional: Riskfolio for portfolio optimization
 try:
     import riskfolio as rp
     riskfolio_available = True
@@ -107,10 +107,28 @@ if st.sidebar.button("🔍 Run Analysis"):
                 df_missing = pd.DataFrame(incomplete_data_notes)
                 st.dataframe(df_missing)
 
-        if not data:
+        if len(data) == 0:
             st.error("❌ No valid data downloaded.")
         else:
-            df = pd.DataFrame(data).ffill().dropna()
+            df = pd.DataFrame(data).ffill()
+            st.write(f"📊 Data range in df: {df.index.min().date()} to {df.index.max().date()}")
+            buffer_prices = io.StringIO()
+            df.to_csv(buffer_prices)
+            buffer_prices.seek(0)
+            st.download_button("⬇️ Download Price Data CSV", data=buffer_prices.getvalue(), file_name="prices.csv", mime="text/csv")
+
+            if freq == "Yearly" and overlap == "No":
+                temp = df.resample("Y").last()
+                returns = temp.pct_change().dropna()
+                st.caption("🧠 Using non-overlapping year-end returns (Excel-style).")
+            elif freq == "Yearly" and overlap == "Yes":
+                returns = df.pct_change(252).dropna()
+            elif freq == "Monthly":
+                temp = df.resample("M").last()
+                returns = temp.pct_change().dropna()
+            else:
+                returns = df.pct_change()
+
             # ---------------------------------------------
             # Price History Visualization
             # ---------------------------------------------
@@ -154,27 +172,44 @@ if st.sidebar.button("🔍 Run Analysis"):
             # ---------------------------------------------
             if freq == "Daily":
                 temp = df
+                returns = temp.pct_change().dropna() if abs_or_pct == "% Change (Relative)" else temp.diff().dropna()
+
             elif freq == "Monthly":
                 temp = df.resample("M").last()
+                returns = temp.pct_change().dropna() if abs_or_pct == "% Change (Relative)" else temp.diff().dropna()
+
             elif freq == "Yearly":
-                temp = df.resample("Y").last()
-
-            if abs_or_pct == "% Change (Relative)":
-                if freq == "Yearly" and overlap == "Yes":
-                    returns = df.pct_change(252).dropna()
+                if overlap == "Yes":
+                    # Use rolling 252-day change on full daily data (not resampled)
+                    returns = df.pct_change(252).dropna() if abs_or_pct == "% Change (Relative)" else df.diff(252).dropna()
                 else:
-                    returns = temp.pct_change().dropna()
-            else:
-                returns = temp.diff().dropna()
-
-            # Warn if data points too few
-            if len(returns) < 30:
-                st.warning("⚠️ Fewer than 30 data points — correlation may be unreliable.")
+                    temp = df.resample("Y").last()
+                    returns = temp.pct_change().dropna() if abs_or_pct == "% Change (Relative)" else temp.diff().dropna()
 
             # ---------------------------------------------
             # Correlation Matrix
             # ---------------------------------------------
-            corr = returns.corr(method=corr_type.lower())
+            returns = df.pct_change()
+
+            tickers = returns.columns.tolist()
+            pairwise_corr = pd.DataFrame(index=tickers, columns=tickers, dtype=float)
+
+            for i, j in itertools.combinations(tickers, 2):
+                x = returns[i]
+                y = returns[j]
+
+                # Temporary DataFrame to find overlapping non-NA pairs
+                pair_df = pd.concat([x, y], axis=1, keys=[i, j]).dropna()
+
+                if len(pair_df) > 1:
+                    corr_val = pair_df[i].corr(pair_df[j], method=corr_type.lower())
+                    pairwise_corr.loc[i, j] = corr_val
+                    pairwise_corr.loc[j, i] = corr_val
+
+            # Fill diagonal with 1s
+            np.fill_diagonal(pairwise_corr.values, 1.0)
+
+            corr = pairwise_corr
 
             st.subheader("📍 Key Correlation Highlights")
 
@@ -253,7 +288,18 @@ if st.sidebar.button("🔍 Run Analysis"):
             # ---------------------------------------------
             if riskfolio_available and len(tickers) > 1:
                 st.subheader("📉 Risk Metrics (VaR, CVaR, Sharpe)")
-                port = rp.Portfolio(returns=returns)
+                returns_clean = returns.replace([np.inf, -np.inf], np.nan)
+
+                # Drop columns (assets) that are mostly NaNs — but keep if they have enough data
+                min_valid_obs = 30
+                returns_clean = returns_clean.loc[:, returns_clean.notna().sum() > min_valid_obs]
+
+                # Drop rows where remaining assets have missing values
+                returns_clean = returns_clean.dropna()
+                
+                if len(returns_clean) < 30:
+                    st.warning("⚠️ Fewer than 30 data points — risk metrics may be unreliable.")
+                port = rp.Portfolio(returns=returns_clean)
                 port.assets_stats(method_mu='hist', method_cov='hist')
 
                 # Compute VaR, CVaR, Sharpe
